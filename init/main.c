@@ -200,13 +200,13 @@ EXPORT_SYMBOL(loops_per_jiffy);
 
 static int __init debug_kernel(char *str)
 {
-	console_loglevel = 10;
+	console_loglevel = 7;
 	return 0;
 }
 
 static int __init quiet_kernel(char *str)
 {
-	console_loglevel = 4;
+	console_loglevel = 7;
 	return 0;
 }
 
@@ -223,6 +223,7 @@ static int __init loglevel(char *str)
 	 * are quite hard to debug
 	 */
 	if (get_option(&str, &newlevel)) {
+		newlevel=7;
 		console_loglevel = newlevel;
         default_message_loglevel = newlevel;  
 		return 0;

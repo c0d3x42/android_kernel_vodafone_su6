@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -36,7 +36,7 @@
  *
  */
 #include "wniApi.h"
-#include "wniCfgSta.h"
+#include "wniCfg.h"
 #include "cfgApi.h"
 #include "sirApi.h"
 #include "schApi.h"
@@ -571,14 +571,14 @@ limProcessMlmAuthCnf(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
             cfgAuthType = pMac->lim.gLimPreAuthType;
         
         if ((cfgAuthType == eSIR_AUTO_SWITCH) &&
-                (((tLimMlmAuthCnf *) pMsgBuf)->authType == eSIR_OPEN_SYSTEM)
+                (((tLimMlmAuthCnf *) pMsgBuf)->authType == eSIR_SHARED_KEY)
                 && (eSIR_MAC_AUTH_ALGO_NOT_SUPPORTED_STATUS == ((tLimMlmAuthCnf *) pMsgBuf)->protStatusCode))
         {
             /**
-             * When Open authentication fails with reason code "13" and
-             * authType set to 'auto switch', Try with Shared Authentication
+             * When Shared authentication fails with reason code "13" and
+             * authType set to 'auto switch', Try with Open Authentication
              */
-            authMode = eSIR_SHARED_KEY;
+            authMode = eSIR_OPEN_SYSTEM;
             // Trigger MAC based Authentication
             pMlmAuthReq = vos_mem_malloc(sizeof(tLimMlmAuthReq));
             if ( NULL == pMlmAuthReq )
@@ -946,6 +946,23 @@ limProcessMlmReassocCnf(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
     if (psessionEntry->pLimReAssocReq) {
         vos_mem_free(psessionEntry->pLimReAssocReq);
         psessionEntry->pLimReAssocReq = NULL;
+    }
+
+    /* Upon Reassoc success or failure, freeup the cached
+     * preauth request, to ensure that channel switch is now
+     * allowed following any change in HT params.
+     */
+    if (pMac->ft.ftPEContext.pFTPreAuthReq)
+    {
+        limLog(pMac, LOG1, "%s: Freeing pFTPreAuthReq= %p", __func__,
+               pMac->ft.ftPEContext.pFTPreAuthReq);
+        if (pMac->ft.ftPEContext.pFTPreAuthReq->pbssDescription)
+        {
+            vos_mem_free(pMac->ft.ftPEContext.pFTPreAuthReq->pbssDescription);
+            pMac->ft.ftPEContext.pFTPreAuthReq->pbssDescription = NULL;
+        }
+        vos_mem_free(pMac->ft.ftPEContext.pFTPreAuthReq);
+        pMac->ft.ftPEContext.pFTPreAuthReq = NULL;
     }
 
     PELOGE(limLog(pMac, LOG1, FL("Rcv MLM_REASSOC_CNF with result code %d"), pLimMlmReassocCnf->resultCode);)
@@ -1532,7 +1549,8 @@ limProcessMlmDeauthCnf(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
     if ((psessionEntry->limSystemRole == eLIM_STA_ROLE)|| (psessionEntry->limSystemRole == eLIM_BT_AMP_STA_ROLE))
     {
         // Deauth Confirm from MLM
-        if (psessionEntry->limSmeState != eLIM_SME_WT_DEAUTH_STATE)
+        if ((psessionEntry->limSmeState != eLIM_SME_WT_DISASSOC_STATE) &&
+            (psessionEntry->limSmeState != eLIM_SME_WT_DEAUTH_STATE))
         {
             /**
              * Should not have received Deauth confirm
@@ -2756,7 +2774,7 @@ limProcessStaMlmAddBssRspPreAssoc( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ, tpPES
                        FL("could not retrieve AuthType"));
             }
             if (cfgAuthType == eSIR_AUTO_SWITCH) 
-                authMode = eSIR_OPEN_SYSTEM; // Try Open Authentication first
+                authMode = eSIR_SHARED_KEY; // Try Shared Authentication first
             else
                 authMode = cfgAuthType;
 
@@ -2844,6 +2862,10 @@ limProcessStaMlmAddBssRspFT(tpAniSirGlobal pMac, tpSirMsgQ limMsgQ, tpPESession 
     tANI_U32 listenInterval = WNI_CFG_LISTEN_INTERVAL_STADEF;
     tpAddBssParams pAddBssParams = (tpAddBssParams) limMsgQ->bodyptr;
     tANI_U32 selfStaDot11Mode = 0;
+#ifdef FEATURE_WLAN_ESE
+    tLimMlmReassocReq       *pMlmReassocReq;
+    tANI_U32 val = 0;
+#endif
 
     /* Sanity Checks */
 
@@ -2875,6 +2897,39 @@ limProcessStaMlmAddBssRspFT(tpAniSirGlobal pMac, tpSirMsgQ limMsgQ, tpPESession 
 #endif
     // Prepare and send Reassociation request frame
     // start reassoc timer.
+
+
+#ifdef FEATURE_WLAN_ESE
+    /*
+     * In case of Ese Reassociation, change the reassoc timer
+     * value.
+     */
+    pMlmReassocReq = (tLimMlmReassocReq *)(psessionEntry->pLimMlmReassocReq);
+    if (pMlmReassocReq == NULL)
+    {
+        limLog(pMac, LOGE,
+          FL("Invalid pMlmReassocReq"));
+        goto end;
+    }
+    val = pMlmReassocReq->reassocFailureTimeout;
+    if (psessionEntry->isESEconnection)
+    {
+        val = val/LIM_MAX_REASSOC_RETRY_LIMIT;
+    }
+    if (tx_timer_deactivate(&pMac->lim.limTimers.gLimReassocFailureTimer) !=
+                                                TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+          FL("unable to deactivate Reassoc failure timer"));
+    }
+    val = SYS_MS_TO_TICKS(val);
+    if (tx_timer_change(&pMac->lim.limTimers.gLimReassocFailureTimer,
+                                val, 0) != TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+          FL("unable to change Reassociation failure timer"));
+    }
+#endif
     pMac->lim.limTimers.gLimReassocFailureTimer.sessionId = psessionEntry->peSessionId;
     /// Start reassociation failure timer
     MTRACE(macTrace(pMac, TRACE_CODE_TIMER_ACTIVATE, psessionEntry->peSessionId, eLIM_REASSOC_FAIL_TIMER));
@@ -3102,15 +3157,17 @@ limProcessStaMlmAddBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ,tpPESession ps
         limProcessStaMlmAddBssRspPreAssoc(pMac, limMsgQ, psessionEntry);
         goto end;
     }
-    if( eLIM_MLM_WT_ADD_BSS_RSP_REASSOC_STATE == psessionEntry->limMlmState )
+
+    if(( eLIM_MLM_WT_ADD_BSS_RSP_REASSOC_STATE == psessionEntry->limMlmState ) ||
+       ( eLIM_MLM_WT_ADD_BSS_RSP_FT_REASSOC_STATE == psessionEntry->limMlmState ))
     {
         mesgType = LIM_MLM_REASSOC_CNF;
         subType = LIM_REASSOC;
-     //If Reassoc is happening for the same BSS, then use the existing StaId and indicate to HAL
-     //to update the existing STA entry.
-     //If Reassoc is happening for the new BSS, then old BSS and STA entry would have been already deleted
-     //before PE tries to add BSS for the new BSS, so set the updateSta to false and pass INVALID STA Index.
-    if (sirCompareMacAddr( psessionEntry->bssId, psessionEntry->limReAssocbssId))
+        //If Reassoc is happening for the same BSS, then use the existing StaId and indicate to HAL
+        //to update the existing STA entry.
+        //If Reassoc is happening for the new BSS, then old BSS and STA entry would have been already deleted
+        //before PE tries to add BSS for the new BSS, so set the updateSta to false and pass INVALID STA Index.
+        if (sirCompareMacAddr( psessionEntry->bssId, psessionEntry->limReAssocbssId))
         {
             staIdx = psessionEntry->staId;
             updateSta  = true;
@@ -3183,14 +3240,22 @@ limProcessStaMlmAddBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ,tpPESession ps
     }
     else
     {
-        limLog( pMac, LOGP, FL( "SessionId:%d ADD_BSS failed!" ),
-                psessionEntry->peSessionId);
+        limLog( pMac, LOGP, FL( "SessionId:%d ADD_BSS failed! mlmState = %d" ),
+                psessionEntry->peSessionId,  psessionEntry->limMlmState);
         // Return Assoc confirm to SME with failure
-        mlmAssocCnf.resultCode = (tSirResultCodes) eSIR_SME_REFUSED;
+        if(eLIM_MLM_WT_ADD_BSS_RSP_FT_REASSOC_STATE == psessionEntry->limMlmState)
+            mlmAssocCnf.resultCode = (tSirResultCodes) eSIR_SME_FT_REASSOC_FAILURE;
+        else
+            mlmAssocCnf.resultCode = (tSirResultCodes) eSIR_SME_REFUSED;
     }
 
     if(mlmAssocCnf.resultCode != eSIR_SME_SUCCESS)
     {
+        psessionEntry->limMlmState = eLIM_MLM_IDLE_STATE;
+        //Set the RXP mode to IDLE, so it starts filtering the frames.
+        if(limSetLinkState(pMac, eSIR_LINK_IDLE_STATE,psessionEntry->bssId,
+            psessionEntry->selfMacAddr, NULL, NULL) != eSIR_SUCCESS)
+            PELOGE(limLog(pMac, LOGE,  FL("Failed to set the LinkState\n"));)
         /* Update PE session Id*/
         mlmAssocCnf.sessionId = psessionEntry->peSessionId;
         limPostSmeMessage( pMac, mesgType, (tANI_U32 *) &mlmAssocCnf );
@@ -3708,6 +3773,9 @@ static void limProcessSwitchChannelReAssocReq(tpAniSirGlobal pMac, tpPESession p
 {
     tLimMlmReassocCnf       mlmReassocCnf;
     tLimMlmReassocReq       *pMlmReassocReq;
+#ifdef FEATURE_WLAN_ESE
+    tANI_U32                val = 0;
+#endif
     pMlmReassocReq = (tLimMlmReassocReq *)(psessionEntry->pLimMlmReassocReq);
     if(pMlmReassocReq == NULL)
     {
@@ -3722,6 +3790,32 @@ static void limProcessSwitchChannelReAssocReq(tpAniSirGlobal pMac, tpPESession p
         mlmReassocCnf.resultCode = eSIR_SME_CHANNEL_SWITCH_FAIL;
         goto end;
     }
+
+#ifdef FEATURE_WLAN_ESE
+    /*
+     * In case of Ese Reassociation, change the reassoc timer
+     * value.
+     */
+    val = pMlmReassocReq->reassocFailureTimeout;
+    if (psessionEntry->isESEconnection)
+    {
+        val = val/LIM_MAX_REASSOC_RETRY_LIMIT;
+    }
+    if (tx_timer_deactivate(&pMac->lim.limTimers.gLimReassocFailureTimer) !=
+                                                TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+           FL("unable to deactivate Reassoc failure timer"));
+    }
+    val = SYS_MS_TO_TICKS(val);
+    if (tx_timer_change(&pMac->lim.limTimers.gLimReassocFailureTimer,
+                                val, 0) != TX_SUCCESS)
+    {
+        limLog(pMac, LOGP,
+          FL("unable to change Reassociation failure timer"));
+    }
+#endif
+    pMac->lim.limTimers.gLimReassocFailureTimer.sessionId = psessionEntry->peSessionId;
     /// Start reassociation failure timer
     MTRACE(macTrace(pMac, TRACE_CODE_TIMER_ACTIVATE, psessionEntry->peSessionId, eLIM_REASSOC_FAIL_TIMER));
     if (tx_timer_activate(&pMac->lim.limTimers.gLimReassocFailureTimer)

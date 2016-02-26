@@ -465,9 +465,6 @@ typedef enum
 
   WDI_SPOOF_MAC_ADDR_REQ                         = 101,
 
-  /* Send command to encrypt the given message */
-  WDI_ENCRYPT_MSG_REQ                            = 102,
-
   WDI_MAX_REQ,
 
   /*Send a suspend Indication down to HAL*/
@@ -506,10 +503,13 @@ typedef enum
   /* csa channel switch req*/
   WDI_CH_SWITCH_REQ_V1,
   WDI_TDLS_CHAN_SWITCH_REQ,
+  WDI_SET_RTS_CTS_HTVHT_IND,
 
   /*Keep adding the indications to the max request
     such that we keep them sepparate */
+  WDI_ANTENNA_DIVERSITY_SELECTION_REQ,
   WDI_MAX_UMAC_IND
+
 }WDI_RequestEnumType;
 
 /*--------------------------------------------------------------------------- 
@@ -793,9 +793,6 @@ typedef enum
   WDI_EXTSCAN_RESET_SIGNF_RSSI_CHANGE_RSP        = 100,
 #endif
   WDI_SPOOF_MAC_ADDR_RSP                         = 101,
-
-  /* Send command to encrypt the given message */
-  WDI_ENCRYPT_MSG_RSP                            = 102,
   /*-------------------------------------------------------------------------
     Indications
      !! Keep these last in the enum if possible
@@ -874,6 +871,8 @@ typedef enum
 #endif
   WDI_TDLS_CHAN_SWITCH_REQ_RESP      = WDI_HAL_IND_MIN + 26,
   WDI_HAL_DEL_BA_IND                 = WDI_HAL_IND_MIN + 27,
+  WDI_HAL_LOST_LINK_PARAMS_IND       = WDI_HAL_IND_MIN + 28,
+  WDI_ANTENNA_DIVERSITY_SELECTION_RSP = WDI_HAL_IND_MIN + 29,
   WDI_MAX_RESP
 }WDI_ResponseEnumType; 
 
@@ -6083,18 +6082,75 @@ WDI_ProcessSpoofMacAddrRsp
   WDI_EventInfoType*     pEventData
 );
 
+/**
+*@brief Process Lost Link param function (called when
+        an indication is being received over the
+        bus from HAL)
+
+ @param  pWDICtx:         pointer to the WLAN DAL context
+         pEventData:      pointer to the event information structure
+
+ @see
+ @return Result of the function call
+*/
+
 WDI_Status
-WDI_ProcessEncryptMsgReq
+WDI_Process_LostLinkParamInd
+(
+    WDI_ControlBlockType*  pWDICtx,
+    WDI_EventInfoType*     pEventData
+);
+
+
+/**
+ @brief WDI_ProcessSetRtsCtsHtvhtInd
+        Set RTS/CTS indication for diff modes.
+
+ @param  pWDICtx:         pointer to the WLAN DAL context
+         pEventData:      pointer to the event information structure
+
+ @return Result of the function call
+*/
+
+
+WDI_Status
+WDI_ProcessSetRtsCtsHtvhtInd
 (
   WDI_ControlBlockType*  pWDICtx,
   WDI_EventInfoType*     pEventData
 );
 
+/**
+ @brief Process get current antenna index command
+
+ @param  pWDICtx:         pointer to the WLAN DAL context
+         pEventData:      pointer to the event information structure
+
+ @see
+ @return Result of the function call
+*/
 WDI_Status
-WDI_ProcessEncryptMsgRsp
+WDI_ProcessGetCurrentAntennaIndex
+(
+    WDI_ControlBlockType*  pWDICtx,
+    WDI_EventInfoType*     pEventData
+);
+
+/**
+ @brief Process get current antenna index response from FW
+
+ @param  pWDICtx:         pointer to the WLAN DAL context
+         pEventData:      pointer to the event information structure
+
+ @see
+ @return Result of the function call
+*/
+WDI_Status
+WDI_ProcessGetCurrentAntennaIndexRsp
 (
   WDI_ControlBlockType*  pWDICtx,
   WDI_EventInfoType*     pEventData
 );
+
 #endif /*WLAN_QCT_WDI_I_H*/
 
